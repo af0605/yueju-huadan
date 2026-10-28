@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>扫码见 · 二维码</title>
+<style>
+  :root { --rose:#d9526b; --ink:#4a3238; --muted:#a98a90; --line:#f0dcdd; }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; min-height:100vh; display:grid; place-items:center;
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background: radial-gradient(60% 40% at 50% 0%, #fff6f4, #fdf1ee 70%);
+    color:var(--ink); padding:28px 20px;
+  }
+  .card {
+    width:min(92vw, 460px); background:#fff; border-radius:24px;
+    box-shadow:0 20px 60px rgba(184,60,85,.13); padding:28px 26px 24px; text-align:center;
+  }
+  h1 { margin:0 0 6px; font-size:19px; letter-spacing:.06em; font-weight:600; }
+  .sub { margin:0 0 20px; font-size:12px; color:var(--muted); letter-spacing:.14em; }
+  #qr { width:min(72vw, 300px); height:auto; image-rendering:pixelated; border-radius:12px; }
+  .url {
+    margin:14px auto 0; font-size:12.5px; color:var(--rose); word-break:break-all;
+    background:#fff5f7; border:1px solid #f7e2e6; border-radius:12px; padding:10px 12px;
+    font-family:ui-monospace, Menlo, Consolas, monospace; line-height:1.5;
+  }
+  .row { display:flex; gap:10px; margin-top:16px; }  button, .dl {
+    flex:1; padding:11px 12px; border-radius:12px; border:1px solid var(--line);
+    background:#fff; color:var(--rose); font-size:13.5px; font-family:inherit;
+    text-decoration:none; text-align:center; cursor:pointer;
+  }
+  button.primary { background:linear-gradient(135deg,#f7a8b8,#d9526b); color:#fff; border-color:transparent; }
+  .hint { margin:16px 0 0; font-size:12px; color:var(--muted); line-height:1.8; text-align:left; }
+  .note { margin:10px 0 0; font-size:12px; color:#4f8a5b; line-height:1.6; }
+  .hint b { color:var(--rose); font-weight:600; }
+  input {
+    width:100%; margin-top:14px; padding:10px 12px; border-radius:12px;
+    border:1px solid var(--line); font-size:13px; font-family:inherit; color:var(--ink); outline:none;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>扫码见她</h1>
+  <p class="sub" id="sub">手机相机或微信扫 · 任何网络都能进</p>
+  <canvas id="qr" width="1024" height="1024"></canvas>
+  <div class="url" id="url"></div>
+  <p class="note" id="note" style="display:none"></p>
+
+  <input id="manual" type="text" placeholder="地址不对？在这里手动改一下，回车生效" />
+
+  <div class="row">
+    <a class="dl" id="dl" download="qr.png">下载 PNG</a>
+    <button class="primary" id="copy">复制地址</button>
+  </div>
+
+  <p class="hint" id="hint">
+    <b>公网（不连 WiFi 也能扫）：</b>在有网的前提下，先跑 <code>python serve.py</code>，再双击
+    <code>启动公网.bat</code>，等它打印出 https 地址，刷新本页就是公网码。<br>
+    <b>局域网：</b>不跑那个 bat 时，本页自动用同一个 WiFi 的地址。<br>
+    <b>提醒：</b>公网地址是临时隧道，电脑和那个黑窗口都得开着；关了重开地址会变。
+  </p>
+</div>
+
+<script src="vendor/qrcode.js"></script>
+<script>
+(function () {
+  var canvas = document.getElementById('qr');
+  var ctx = canvas.getContext('2d');
+  var urlBox = document.getElementById('url');
+  var manual = document.getElementById('manual');
+  var dl = document.getElementById('dl');
+
+  function make(url) {
+    urlBox.textContent = url;
+    manual.value = url;
+    var qr = qrcode(0, 'M');
+    qr.addData(url, 'Byte');
+    qr.make();
+    var n = qr.getModuleCount();
+    var quiet = 4;
+    var size = canvas.width;
+    var cell = Math.floor(size / (n + quiet * 2));
+    var offset = Math.floor((size - cell * n) / 2);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#2a1a1e';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect(offset + c * cell, offset + r * cell, cell, cell);
+      }
+    }
+    dl.href = canvas.toDataURL('image/png');
+  }
+
+  var note = document.getElementById('note');
+  var sub = document.getElementById('sub');
+
+  function say(text, color) {
+    note.textContent = text;
+    note.style.color = color || '#4f8a5b';
+    note.style.display = '';
+  }
+
+  var cur = location.href.replace(/qr\.html.*$/, '');
+  if (!/^https?:/.test(cur)) cur = 'http://127.0.0.1:8765/';
+  var isLoopback = /\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(cur);
+
+  function getJson(name) {
+    return fetch(name, { cache: 'no-store' }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).catch(function () { return null; });
+  }
+
+  // 有公网地址（隧道/托管）就优先用它；否则退回局域网地址
+  // 想手动指定：qr.html?u=https://example.com/
+  function boot() {
+    var forced = /[?&]u=([^&]+)/.exec(location.search);
+    if (forced) {
+      var fu = decodeURIComponent(forced[1]);
+      make(fu);
+      sub.textContent = '手机相机或微信扫 · 任何网络都能进';
+      say('这是手动指定的地址。', '#4f8a5b');
+      return;
+    }
+    if (!isLoopback) {
+      make(cur);
+      var h = document.getElementById('hint');
+      if (h) {
+        h.innerHTML =
+          '<b>这是永久地址。</b>把它印在展板上、发给别人都行，' +
+          '手机相机或微信扫这个码就能打开，不挑网络。<br>' +
+          '<b>换内容：</b>我这边重新部署一次，地址不变。';
+      }
+      return;
+    }
+    getJson('public.json').then(function (p) {
+      if (p && p.url) {
+        make(p.url);
+        sub.textContent = '手机相机或微信扫 · 任何网络都能进';
+        say('公网地址已连上，不连同一个 WiFi 也能扫。', '#4f8a5b');
+        if (p.note) say(p.note, '#b07a2a');
+        return;
+      }
+      return getJson('lan.json').then(function (j) {
+        make((j && j.url) || cur);
+        sub.textContent = '手机相机或微信扫 · 需同一个 WiFi';
+        say('现在只有局域网地址：手机要跟电脑连同一个 WiFi。想不连 WiFi 也能扫，见下方说明。', '#b07a2a');
+      });
+    });
+  }
+  boot();
+
+  manual.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') make(manual.value.trim());
+  });
+
+  document.getElementById('copy').addEventListener('click', function () {
+    var ok = false;
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = urlBox.textContent;
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (err) {}
+    this.textContent = ok ? '已复制' : '手动选中复制';
+    var self = this;
+    setTimeout(function () { self.textContent = '复制地址'; }, 1400);
+  });
+})();
+</script>
+</body>
+</html>
